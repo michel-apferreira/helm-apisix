@@ -45,6 +45,22 @@ apisix:
   service:
     type: NodePort
 
+  # Init container que faz o APISIX aguardar o etcd estar pronto antes de iniciar.
+  # Sem isso, o APISIX tenta conectar no etcd imediatamente e crasha (race condition).
+  # O comando fica em loop até conseguir conexão TCP na porta 2379.
+  extraInitContainers:
+    - name: wait-etcd
+      image: busybox:1.28
+      command:
+        - sh
+        - -c
+        - |
+          until nc -z apisix-dev-etcd.ingress-apisix.svc.cluster.local 2379; do
+            echo "Aguardando etcd ficar disponivel...";
+            sleep 3;
+          done;
+          echo "etcd disponivel!"
+
   apisix:
     enableIPv6: false
     admin:
