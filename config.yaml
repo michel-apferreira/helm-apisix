@@ -1,0 +1,40 @@
+version: 2.1
+
+jobs:
+  build-and-push:
+    machine:
+      image: ubuntu-2204:current
+    steps:
+      - checkout
+      - run:
+          name: Authenticate on GCP and configure Docker
+          command: |
+            echo "$GCLOUD_SERVICE_KEY_PROD" > /tmp/gcloud-key.json
+            gcloud auth activate-service-account --key-file=/tmp/gcloud-key.json
+            gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+            rm /tmp/gcloud-key.json
+      - run:
+          name: Build Docker image
+          command: |
+            docker build -t n8n-automation-mid-mkt .
+      - run:
+          name: Tag and push to Artifact Registry
+          command: |
+            IMAGE=us-central1-docker.pkg.dev/${GOOGLE_PROJECT_ID_PROD}/docker/n8n-automation-mid-mkt
+            docker tag n8n-automation-mid-mkt ${IMAGE}:${CIRCLE_SHA1}
+            docker tag n8n-automation-mid-mkt ${IMAGE}:latest
+            docker push ${IMAGE}:${CIRCLE_SHA1}
+            docker push ${IMAGE}:latest
+      - run:
+          name: Trigger Spinnaker deploy
+          command: |
+
+            curl -X POST https://spinnaker-api.rdops.systems/webhooks/webhook/circleci-n8n-mid-mkt \
+              -H "Content-Type: application/json" \
+              -d "{\"secret\": \"${SPINNAKER_WEBHOOK_SECRET}\", \"parameters\": {\"imageTag\": \"${CIRCLE_SHA1}\"}}"
+
+
+workflows:
+  ci:
+    jobs:
+      - build-and-push
