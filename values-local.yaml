@@ -26,6 +26,7 @@ etcd:
       memory: "256Mi"
 
 keycloak:
+  enabled: true  # habilitar localmente para testar autenticacao
   replicaCount: 1
   postgresql:
     enabled: true  # Postgres local para dev

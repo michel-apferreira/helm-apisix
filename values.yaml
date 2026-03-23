@@ -69,9 +69,18 @@ etcd:
 # ==============================================================================
 # KEYCLOAK - IdP para autenticacao OAuth2/OIDC via plugin APISIX
 # Documentacao: https://www.keycloak.org/documentation
+#
+# Desabilitado por padrao - habilitar apenas quando for testar autenticacao
+# (Fase 2 da POC). Para a Fase 1 (validar roteamento), nao e necessario.
+#
+# Para habilitar:
+#   --set keycloak.enabled=true
+# Ou no values-local.yaml / values-staging.yaml:
+#   keycloak:
+#     enabled: true
 # ==============================================================================
 keycloak:
-  enabled: true
+  enabled: false
 
   fullnameOverride: ""
 
