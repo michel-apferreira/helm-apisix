@@ -1,0 +1,397 @@
+nameOverride: ""
+fullnameOverride: ""
+
+# ==============================================================================
+# ETCD - Cluster 3 nos com anti-afinidade por zona (GKE us-central1 a/c/f)
+# Documentacao: https://etcd.io/docs/v3.6/op-guide/clustering/
+# ==============================================================================
+etcd:
+  enabled: true
+
+  # Nome fixo para o servico (nao prefixado pelo Release.Name).
+  # Ajuste externalEtcd.host no bloco apisix abaixo se mudar este valor.
+  fullnameOverride: ""
+
+  image:
+    repository: quay.io/coreos/etcd
+    tag: "v3.6.0"
+    pullPolicy: IfNotPresent
+
+  replicaCount: 3
+
+  # Portas padrao do etcd
+  clientPort: 2379
+  peerPort: 2380
+  metricsPort: 8080
+
+  # Para subir um cluster ja existente: "existing"
+  # Para criar um novo cluster: "new"
+  initialClusterState: "new"
+
+  autoCompaction:
+    enabled: true
+    mode: "periodic"
+    retention: "1h"
+
+  podAntiAffinity:
+    # true = required (nao coloca 2 pods etcd no mesmo node - recomendado para HA)
+    # false = preferred (melhor esforco)
+    required: true
+    # kubernetes.io/hostname = anti-afinidade por node
+    # topology.kubernetes.io/zone = anti-afinidade por zona (GKE)
+    topologyKey: "topology.kubernetes.io/zone"
+
+  nodeSelector: {}
+  tolerations: []
+
+  persistence:
+    # premium-rwo = Regional SSD Persistent Disk no GKE (us-central1)
+    # standard-rwo = Standard Persistent Disk
+    # "" = usa a StorageClass padrao do cluster
+    storageClass: "premium-rwo"
+    accessModes:
+      - ReadWriteOnce
+    size: "10Gi"
+
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+  podLabels: {}
+  podAnnotations: {}
+  service:
+    annotations: {}
+
+# ==============================================================================
+# KEYCLOAK - IdP para autenticacao OAuth2/OIDC via plugin APISIX
+# Documentacao: https://www.keycloak.org/documentation
+#
+# Desabilitado por padrao - habilitar apenas quando for testar autenticacao
+# (Fase 2 da POC). Para a Fase 1 (validar roteamento), nao e necessario.
+#
+# Para habilitar:
+#   --set keycloak.enabled=true
+# Ou no values-local.yaml / values-staging.yaml:
+#   keycloak:
+#     enabled: true
+# ==============================================================================
+keycloak:
+  enabled: false
+
+  fullnameOverride: ""
+
+  image:
+    repository: quay.io/keycloak/keycloak
+    tag: "26.5.4"
+    pullPolicy: IfNotPresent
+
+  # 2 replicas para rolling update seguro (Infinispan mantem sessoes distribuidas)
+  replicaCount: 2
+
+  auth:
+    adminUser: "admin"
+    # IMPORTANTE: Alterar em producao!
+    adminPassword: "admin"
+
+  hostnameStrict: "false"
+
+  service:
+    type: ClusterIP
+    port: 8080
+
+  database:
+    vendor: "postgres"
+    # Para producao: IP/hostname do Cloud SQL (rd-crm-stg-01)
+    # Para POC local com postgresql.enabled=true: usar o nome do servico postgres
+    host: ""  # Sera substituido por apisix-poc-keycloak-postgres se postgresql.enabled=true
+    port: 5432
+    name: "keycloak"
+    username: "keycloak"
+    # IMPORTANTE: Alterar em producao!
+    password: "keycloak"
+
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1700Mi"
+    limits:
+      cpu: "2000m"
+      memory: "2000Mi"
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podLabels: {}
+  podAnnotations: {}
+  extraEnv: []
+
+  # PostgreSQL local para a POC (emptyDir - dados efemeros)
+  # Para staging/producao: desabilitar e configurar database.host com Cloud SQL
+  postgresql:
+    enabled: true
+    image:
+      repository: mirror.gcr.io/postgres
+      tag: "17"
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+# ==============================================================================
+# APISIX - Subchart apache/apisix v2.12.6 (appVersion 3.14.1)
+# Documentacao: https://apisix.apache.org/docs/helm-chart/apisix/
+# ==============================================================================
+apisix:
+  # Habilita o subchart apache/apisix
+  enabled: true
+
+  image:
+    repository: apache/apisix
+    pullPolicy: IfNotPresent
+    tag: "3.14.1-ubuntu"
+
+  # 2 replicas para HA basico na POC
+  # Em producao: usar HPA ou DaemonSet conforme a carga
+  replicaCount: 2
+
+  updateStrategy:
+    type: RollingUpdate
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  # Recursos para os pods do APISIX (data/control plane combinado em modo traditional)
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "2000m"
+      memory: "2048Mi"
+
+  # Anti-afinidade preferencial entre pods APISIX (distribuicao por zona)
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: apisix
+            topologyKey: "topology.kubernetes.io/zone"
+
+  # Servico gateway (data plane) - acesso ao trafego HTTP/HTTPS
+  service:
+    # NodePort para NEG standalone no GKE (Cloud Load Balancing)
+    type: NodePort
+    externalTrafficPolicy: Local
+    http:
+      enabled: true
+      servicePort: 80
+      containerPort: 9080
+    tls:
+      servicePort: 443
+    stream:
+      enabled: false
+      tcp: []
+      udp: []
+
+  # Configuracoes do APISIX
+  apisix:
+    enableIPv6: false
+    enableHTTP2: true
+    enableServerTokens: false
+
+    # Modo traditional: control plane e data plane no mesmo processo
+    # Para producao com escala, considerar modo decoupled
+    deployment:
+      mode: traditional
+      role: traditional
+      role_traditional:
+        config_provider: etcd
+
+    # Admin API - acesso restrito ao ingress-controller
+    admin:
+      enabled: true
+      enable_admin_ui: true
+      type: ClusterIP
+      ip: "0.0.0.0"
+      port: 9180
+      servicePort: 9180
+      cors: true
+      credentials:
+        # IMPORTANTE: Alterar em producao! Usar secretName para armazenar via Secret K8s
+        admin: "f2769e31bee6d3818234b46d6d32537c"
+        viewer: "f2769e31bee6d3818234b46d6d32537d"
+        secretName: ""
+      allow:
+        # Permite acesso apenas de dentro do cluster (ingress-controller + admin UI via port-forward)
+        ipList:
+          - 0.0.0.0/0
+
+    # Control API (health checks e metricas internas)
+    control:
+      enabled: true
+      service:
+        type: ClusterIP
+        ip: "127.0.0.1"
+        port: 9090
+        servicePort: 9090
+
+    # SSL (TLS termination no APISIX)
+    ssl:
+      enabled: false
+      containerPort: 9443
+      sslProtocols: "TLSv1.2 TLSv1.3"
+
+    router:
+      # radixtree_host_uri: compativel com Ingress (host + path)
+      http: radixtree_host_uri
+
+    nginx:
+      workerProcesses: auto
+      workerConnections: "10620"
+      workerRlimitNofile: "20480"
+      enableCPUAffinity: true
+      keepaliveTimeout: 60s
+      logs:
+        enableAccessLog: true
+        accessLog: "/dev/stdout"
+        accessLogFormat: '$remote_addr - $remote_user [$time_local] $http_host "$request" $status $body_bytes_sent $request_time "$http_referer" "$http_user_agent" $upstream_addr $upstream_status $upstream_response_time "$upstream_scheme://$upstream_host$upstream_uri"'
+        accessLogFormatEscape: default
+        errorLog: "/dev/stderr"
+        errorLogLevel: "warn"
+
+    # Prometheus metrics (habilitar ao integrar com Prometheus Operator)
+    prometheus:
+      enabled: false
+      path: /apisix/prometheus/metrics
+      metricPrefix: apisix_
+      containerPort: 9091
+
+    # Plugins habilitados - lista completa equivalente ao nginx-ingress default
+    # Deixar vazio usa os plugins default do APISIX
+    plugins: []
+
+    # Enderecos confiados para X-Forwarded-* (GKE Cloud Load Balancer)
+    trustedAddresses:
+      - 127.0.0.1
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+
+    dns:
+      resolvers:
+        - 169.254.169.254  # GKE metadata server DNS
+        - 172.20.0.10      # kube-dns
+        - 8.8.8.8
+      validity: 30
+      timeout: 5
+
+  # ServiceMonitor para Prometheus Operator (habilitar se o ambiente tiver)
+  metrics:
+    serviceMonitor:
+      enabled: false
+      interval: 15s
+      labels: {}
+
+  # Etcd NAO gerenciado pelo subchart - usamos nosso proprio StatefulSet
+  etcd:
+    enabled: false
+    # Necessario pelo subchart mesmo quando disabled
+    auth:
+      rbac:
+        create: false
+      tls:
+        enabled: false
+    service:
+      port: 2379
+    clusterDomain: cluster.local
+    prefix: "/apisix"
+    timeout: 30
+
+  # Etcd externo: aponta para o StatefulSet que este chart gerencia
+  # O FQDN usa o nome do servico headless criado em etcd-service.yaml
+  # IMPORTANTE: ajustar <RELEASE_NAME> e <NAMESPACE> conforme o deploy
+  # Exemplo para: helm install apisix-gateway . -n ingress-apisix
+  #   -> http://apisix-gateway-etcd.ingress-apisix.svc.cluster.local:2379
+  externalEtcd:
+    host:
+      - "http://RELEASE_NAME-etcd.NAMESPACE.svc.cluster.local:2379"
+    user: ""
+    password: ""
+
+  # ==============================================================================
+  # APISIX Ingress Controller - subchart do apache/apisix
+  # Responsavel por converter recursos Ingress/HTTPRoute em rotas APISIX
+  # ==============================================================================
+  ingress-controller:
+    enabled: true
+
+    deployment:
+      replicas: 1
+      image:
+        repository: apache/apisix-ingress-controller
+        pullPolicy: IfNotPresent
+        tag: "2.0.1"
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "128Mi"
+        limits:
+          cpu: "500m"
+          memory: "256Mi"
+
+    config:
+      logLevel: "info"
+      controllerName: apisix.apache.org/apisix-ingress-controller
+      kubernetes:
+        # IngressClass que o controller vai observar
+        ingressClass: apisix
+        # false = NAO assume como IngressClass default (convive com nginx-ingress)
+        defaultIngressClass: false
+      provider:
+        type: "apisix"
+        syncPeriod: "1m"
+        initSyncDelay: "5m"
+
+    webhook:
+      enabled: true
+      failurePolicy: Ignore
+
+    # GatewayProxy: conecta o ingress-controller ao Admin API do APISIX
+    # O endpoint usa o servico apisix-admin do subchart apisix
+    # IMPORTANTE: ajustar nome do servico conforme Release.Name
+    # Exemplo: helm install apisix-gateway . -n ingress-apisix
+    #   -> http://apisix-gateway-apisix-admin.ingress-apisix.svc.cluster.local:9180
+    gatewayProxy:
+      createDefault: true
+      provider:
+        type: ControlPlane
+        controlPlane:
+          endpoints: []
+          service:
+            # Nome do servico admin do APISIX: <RELEASE_NAME>-apisix-admin
+            name: "RELEASE_NAME-apisix-admin"
+            port: 9180
+          auth:
+            type: AdminKey
+            adminKey:
+              # Deve coincidir com apisix.apisix.admin.credentials.admin
+              value: "f2769e31bee6d3818234b46d6d32537c"
+
+    apisix:
+      adminService:
+        # Namespace onde o APISIX esta instalado
+        namespace: "ingress-apisix"
+        name: "apisix-admin"
+        port: 9180
