@@ -1,0 +1,17 @@
+{{- if and .Values.keycloak.enabled .Values.keycloak.postgresql.enabled }}
+{{- if not .Values.keycloak.database.host }}
+---
+# ConfigMap usado para auto-detectar o host do postgres quando postgresql.enabled=true
+# e keycloak.database.host nao foi definido explicitamente
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "apisix-poc.keycloak.fullname" . }}-db-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "apisix-poc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: keycloak
+data:
+  db-host: {{ include "apisix-poc.postgres.fullname" . }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,35 @@
+{{- if .Values.etcd.enabled }}
+---
+# Servico Headless para resolucao DNS entre peers do cluster etcd
+# publishNotReadyAddresses permite que pods encontrem peers mesmo antes de estarem Ready
+# (necessario para o bootstrap inicial do cluster)
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "apisix-poc.etcd.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "apisix-poc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: etcd
+  {{- with .Values.etcd.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: etcd
+  ports:
+    - name: etcd-client
+      port: {{ .Values.etcd.clientPort }}
+      targetPort: etcd-client
+    - name: etcd-server
+      port: {{ .Values.etcd.peerPort }}
+      targetPort: etcd-server
+    - name: etcd-metrics
+      port: {{ .Values.etcd.metricsPort }}
+      targetPort: etcd-metrics
+{{- end }}

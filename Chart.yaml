@@ -1,0 +1,20 @@
+apiVersion: v2
+name: apisix-poc
+description: |
+  Helm chart para POC do Apache APISIX como substituto do nginx-ingress.
+  Inclui APISIX (data + control plane via subchart), etcd externo com
+  anti-afinidade por zona e Keycloak para autenticacao OAuth2/OIDC.
+  Arquitetura alvo: GKE us-central1 (zonas a, c, f), projeto rd-crm-stg-01.
+type: application
+version: 0.1.0
+appVersion: "3.14.1"
+
+dependencies:
+  - name: apisix
+    version: "2.12.6"
+    repository: "https://apache.github.io/apisix-helm-chart"
+    condition: apisix.enabled
+
+maintainers:
+  - name: Michel Ferreira
+  - name: Marcio Cavalante

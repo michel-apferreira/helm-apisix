@@ -1,0 +1,153 @@
+{{- if .Values.etcd.enabled }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "apisix-poc.etcd.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "apisix-poc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: etcd
+spec:
+  serviceName: {{ include "apisix-poc.etcd.fullname" . }}
+  replicas: {{ .Values.etcd.replicaCount }}
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: etcd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: etcd
+        {{- with .Values.etcd.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        # Referenciado nos args do container como SERVICE_NAME
+        serviceName: {{ include "apisix-poc.etcd.fullname" . }}
+        {{- with .Values.etcd.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      # Anti-afinidade obrigatoria: impede que dois pods etcd fiquem no mesmo node
+      # Garantia de HA no GKE com nodes distribuidos entre zonas
+      affinity:
+        podAntiAffinity:
+          {{- if .Values.etcd.podAntiAffinity.required }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/instance: {{ .Release.Name }}
+                  app.kubernetes.io/component: etcd
+              topologyKey: {{ .Values.etcd.podAntiAffinity.topologyKey }}
+          {{- else }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/instance: {{ .Release.Name }}
+                    app.kubernetes.io/component: etcd
+                topologyKey: {{ .Values.etcd.podAntiAffinity.topologyKey }}
+          {{- end }}
+      {{- with .Values.etcd.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.etcd.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: etcd
+          image: "{{ .Values.etcd.image.repository }}:{{ .Values.etcd.image.tag }}"
+          imagePullPolicy: {{ .Values.etcd.image.pullPolicy }}
+          ports:
+            - name: etcd-client
+              containerPort: {{ .Values.etcd.clientPort }}
+            - name: etcd-server
+              containerPort: {{ .Values.etcd.peerPort }}
+            - name: etcd-metrics
+              containerPort: {{ .Values.etcd.metricsPort }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: {{ .Values.etcd.metricsPort }}
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: {{ .Values.etcd.metricsPort }}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          env:
+            - name: K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: SERVICE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.annotations['serviceName']
+            - name: ETCDCTL_ENDPOINTS
+              value: "$(HOSTNAME).$(SERVICE_NAME):{{ .Values.etcd.clientPort }}"
+            - name: URI_SCHEME
+              value: "http"
+          command:
+            - /usr/local/bin/etcd
+          args:
+            - --name=$(HOSTNAME)
+            - --data-dir=/data
+            - --wal-dir=/data/wal
+            - --listen-peer-urls=$(URI_SCHEME)://0.0.0.0:{{ .Values.etcd.peerPort }}
+            - --listen-client-urls=$(URI_SCHEME)://0.0.0.0:{{ .Values.etcd.clientPort }}
+            - --advertise-client-urls=$(URI_SCHEME)://$(HOSTNAME).$(SERVICE_NAME):{{ .Values.etcd.clientPort }}
+            - --initial-cluster-state={{ .Values.etcd.initialClusterState }}
+            - --initial-cluster-token=etcd-$(K8S_NAMESPACE)
+            # Gera a lista de peers dinamicamente com base no numero de replicas
+            - --initial-cluster={{ range $i, $e := until (.Values.etcd.replicaCount | int) }}{{- if $i }},{{ end -}}
+              {{- $etcdName := (include "apisix-poc.etcd.fullname" $) -}}
+              {{ printf "%s-%d=$(URI_SCHEME)://%s-%d.$(SERVICE_NAME):%d" $etcdName $i $etcdName $i ($.Values.etcd.peerPort | int) }}
+              {{- end }}
+            - --initial-advertise-peer-urls=$(URI_SCHEME)://$(HOSTNAME).$(SERVICE_NAME):{{ .Values.etcd.peerPort }}
+            - --listen-metrics-urls=http://0.0.0.0:{{ .Values.etcd.metricsPort }}
+            {{- if .Values.etcd.autoCompaction.enabled }}
+            - --auto-compaction-mode={{ .Values.etcd.autoCompaction.mode }}
+            - --auto-compaction-retention={{ .Values.etcd.autoCompaction.retention }}
+            {{- end }}
+          {{- with .Values.etcd.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: etcd-data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: etcd-data
+        labels:
+          app.kubernetes.io/instance: {{ .Release.Name }}
+          app.kubernetes.io/component: etcd
+      spec:
+        accessModes: {{ toJson .Values.etcd.persistence.accessModes }}
+        {{- if .Values.etcd.persistence.storageClass }}
+        storageClassName: {{ .Values.etcd.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.etcd.persistence.size }}
+{{- end }}

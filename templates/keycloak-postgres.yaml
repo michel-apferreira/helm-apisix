@@ -1,0 +1,83 @@
+{{- if and .Values.keycloak.enabled .Values.keycloak.postgresql.enabled }}
+---
+# PostgreSQL local para desenvolvimento/testes da POC.
+# ATENCAO: usa emptyDir (dados perdidos ao reiniciar o pod).
+# Em producao: usar Cloud SQL (rd-crm-stg-01) via Cloud SQL Auth Proxy.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "apisix-poc.postgres.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "apisix-poc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: keycloak-postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: keycloak-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: keycloak-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: "{{ .Values.keycloak.postgresql.image.repository }}:{{ .Values.keycloak.postgresql.image.tag }}"
+          imagePullPolicy: {{ .Values.keycloak.postgresql.image.pullPolicy }}
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "apisix-poc.keycloak.fullname" . }}-secret
+                  key: db-username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "apisix-poc.keycloak.fullname" . }}-secret
+                  key: db-password
+            - name: POSTGRES_DB
+              value: {{ .Values.keycloak.database.name | quote }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - {{ .Values.keycloak.database.username | quote }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          {{- with .Values.keycloak.postgresql.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: postgres-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "apisix-poc.postgres.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "apisix-poc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: keycloak-postgres
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: keycloak-postgres
+  ports:
+    - name: postgres
+      protocol: TCP
+      port: 5432
+      targetPort: 5432
+{{- end }}
