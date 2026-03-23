@@ -1,0 +1,76 @@
+# ==============================================================================
+# values-local.yaml - Overrides para desenvolvimento local (minikube/kind)
+#
+# Uso:
+#   helm install apisix-dev . \
+#     --namespace ingress-apisix \
+#     --create-namespace \
+#     --values values.yaml \
+#     --values values-local.yaml
+# ==============================================================================
+
+etcd:
+  replicaCount: 1
+  podAntiAffinity:
+    required: false  # Apenas 1 node em local
+    topologyKey: "kubernetes.io/hostname"
+  persistence:
+    storageClass: ""  # Usa StorageClass default do cluster local
+    size: "1Gi"
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+
+keycloak:
+  replicaCount: 1
+  postgresql:
+    enabled: true  # Postgres local para dev
+  database:
+    host: ""  # Sera preenchido pelo init do keycloak para apontar ao postgres local
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+
+apisix:
+  replicaCount: 1
+
+  service:
+    type: NodePort
+
+  apisix:
+    enableIPv6: false
+    admin:
+      credentials:
+        admin: "test-admin-key-local"
+        viewer: "test-viewer-key-local"
+
+  externalEtcd:
+    host:
+      - "http://apisix-dev-etcd.ingress-apisix.svc.cluster.local:2379"
+
+  ingress-controller:
+    config:
+      logLevel: "debug"
+      provider:
+        initSyncDelay: "1m"
+
+    gatewayProxy:
+      createDefault: true
+      provider:
+        type: ControlPlane
+        controlPlane:
+          service:
+            name: "apisix-dev-apisix-admin"
+            port: 9180
+          auth:
+            type: AdminKey
+            adminKey:
+              value: "test-admin-key-local"

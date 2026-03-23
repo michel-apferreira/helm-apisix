@@ -1,0 +1,128 @@
+# ==============================================================================
+# values-staging.yaml - Overrides para ambiente rd-crm-stg-01 (GKE us-central1)
+#
+# Uso:
+#   helm install apisix-gateway . \
+#     --namespace ingress-apisix \
+#     --create-namespace \
+#     --values values.yaml \
+#     --values values-staging.yaml \
+#     --set apisix.apisix.admin.credentials.admin=<TOKEN_SEGURO> \
+#     --set apisix.apisix.admin.credentials.viewer=<TOKEN_SEGURO> \
+#     --set keycloak.auth.adminPassword=<SENHA_SEGURA> \
+#     --set keycloak.database.password=<SENHA_DB>
+# ==============================================================================
+
+# etcd com anti-afinidade por zona para distribuir entre us-central1-a/c/f
+etcd:
+  replicaCount: 3
+  podAntiAffinity:
+    required: true
+    topologyKey: "topology.kubernetes.io/zone"
+  persistence:
+    storageClass: "premium-rwo"
+    size: "10Gi"
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+
+# Keycloak apontando para Cloud SQL (rd-crm-stg-01)
+# Desabilitar postgresql local e configurar Cloud SQL Auth Proxy ou IP direto
+keycloak:
+  replicaCount: 2
+  postgresql:
+    # Desabilitar postgres local - usar Cloud SQL em staging
+    enabled: false
+  database:
+    vendor: "postgres"
+    # IP privado do Cloud SQL ou endpoint via Cloud SQL Auth Proxy (sidecar)
+    # Ex: 10.X.X.X (IP privado) ou 127.0.0.1 (se usando proxy sidecar)
+    host: "CLOUD_SQL_IP"
+    port: 5432
+    name: "keycloak"
+    username: "keycloak"
+    password: "ALTERAR_EM_PRODUCAO"
+  # Afinidade preferencial por zona us-central1-a (onde o keycloak-0 esta na arquitetura)
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/component: keycloak
+            topologyKey: "topology.kubernetes.io/zone"
+
+apisix:
+  replicaCount: 3  # Um por zona (us-central1-a/c/f)
+
+  # HPA para o data plane do APISIX
+  autoscaling:
+    enabled: false  # Habilitar apos validar carga
+    minReplicas: 3
+    maxReplicas: 9
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+  # Distribuir pods APISIX entre as 3 zonas
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: apisix
+
+  # Servico do tipo NodePort para NEG Standalone no Cloud Load Balancing
+  service:
+    type: NodePort
+    externalTrafficPolicy: Local
+
+  # Metricas habilitadas em staging para observabilidade
+  metrics:
+    serviceMonitor:
+      enabled: false  # Habilitar se Prometheus Operator estiver instalado
+
+  apisix:
+    # IPs confiaveis: incluir range do GKE Load Balancer
+    trustedAddresses:
+      - 127.0.0.1
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+
+    # Prometheus metrics para integracao com Cloud Monitoring ou Prometheus
+    prometheus:
+      enabled: true
+
+  # Etcd externo: FQDN calculado com Release.Name=apisix-gateway, namespace=ingress-apisix
+  externalEtcd:
+    host:
+      - "http://apisix-gateway-etcd.ingress-apisix.svc.cluster.local:2379"
+
+  ingress-controller:
+    config:
+      logLevel: "warn"
+      kubernetes:
+        # Nao assumir como default - manter nginx-ingress rodando em paralelo
+        defaultIngressClass: false
+        ingressClass: apisix
+      provider:
+        # Aumentar delay inicial para garantir que etcd e APISIX estejam prontos
+        initSyncDelay: "10m"
+
+    gatewayProxy:
+      createDefault: true
+      provider:
+        type: ControlPlane
+        controlPlane:
+          service:
+            name: "apisix-gateway-apisix-admin"
+            port: 9180
+          auth:
+            type: AdminKey
+            adminKey:
+              value: "ALTERAR_PARA_COINCIDIR_COM_apisix.apisix.admin.credentials.admin"
