@@ -1,0 +1,57 @@
+╔══════════════════════════════════════════════════════════════╗
+║           APISIX POC - Instalacao concluida!                ║
+╚══════════════════════════════════════════════════════════════╝
+
+Release: {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+
+{{- if .Values.etcd.enabled }}
+
+► etcd ({{ .Values.etcd.replicaCount }} replicas)
+  Servico: {{ include "apisix-poc.etcd.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.etcd.clientPort }}
+
+  Verificar saude do cluster:
+    kubectl exec -n {{ .Release.Namespace }} {{ include "apisix-poc.etcd.fullname" . }}-0 -- \
+      etcdctl endpoint health --endpoints=http://{{ include "apisix-poc.etcd.fullname" . }}-0.{{ include "apisix-poc.etcd.fullname" . }}:2379,http://{{ include "apisix-poc.etcd.fullname" . }}-1.{{ include "apisix-poc.etcd.fullname" . }}:2379,http://{{ include "apisix-poc.etcd.fullname" . }}-2.{{ include "apisix-poc.etcd.fullname" . }}:2379
+{{- end }}
+
+{{- if .Values.apisix.enabled }}
+
+► APISIX
+  Admin API (porta 9180):
+    kubectl port-forward -n {{ .Release.Namespace }} svc/{{ .Release.Name }}-apisix-admin 9180:9180
+
+  Interface Web (Admin UI):
+    kubectl port-forward -n {{ .Release.Namespace }} svc/{{ .Release.Name }}-apisix-admin 9180:9180
+    Acesse: http://localhost:9180/ui
+
+  Testar rota de exemplo:
+    kubectl port-forward -n {{ .Release.Namespace }} svc/{{ .Release.Name }}-apisix-gateway 9080:80
+    curl http://localhost:9080/
+
+  Verificar IngressClass:
+    kubectl get ingressclass
+{{- end }}
+
+{{- if .Values.keycloak.enabled }}
+
+► Keycloak ({{ .Values.keycloak.replicaCount }} replicas)
+  Console de administracao:
+    kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "apisix-poc.keycloak.fullname" . }} 8080:{{ .Values.keycloak.service.port }}
+    Acesse: http://localhost:8080
+
+  {{- if .Values.keycloak.postgresql.enabled }}
+  AVISO: PostgreSQL local com armazenamento efemero (emptyDir).
+         Para producao, configure Cloud SQL via keycloak.database.host
+  {{- end }}
+{{- end }}
+
+► Proximos passos para a POC:
+  1. Validar IngressClass 'apisix' no cluster CRM
+  2. Migrar um Ingress nginx-ingress de teste para APISIX
+  3. Configurar plugin openid-connect apontando para Keycloak
+  4. Comparar comportamento com configuracoes existentes do nginx-ingress
+
+► Documentacao:
+  https://apisix.apache.org/docs/ingress-controller/getting-started/
+  https://apisix.apache.org/docs/apisix/plugins/openid-connect/
